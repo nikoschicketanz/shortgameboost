@@ -779,7 +779,7 @@ def run_streamlit_ui():
             st.markdown("**Hashtags (relevant)**")
             tags = generate_hashtags_de(topic=input_topic, title=input_title, n=12)
             tag_line_space = " ".join(tags)
-            tag_line_newline = "
+            tag_line_newline = 
 ".join(tags)
             st.markdown(" ".join(f"`{t}`" for t in tags))
             c1, c2 = st.columns(2)
