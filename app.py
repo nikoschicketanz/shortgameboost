@@ -779,8 +779,7 @@ def run_streamlit_ui():
             st.markdown("**Hashtags (relevant)**")
             tags = generate_hashtags_de(topic=input_topic, title=input_title, n=12)
             tag_line_space = " ".join(tags)
-            tag_line_newline = 
-".join(tags)
+            tag_line_newline = "\n".join(tags)
             st.markdown(" ".join(f"`{t}`" for t in tags))
             c1, c2 = st.columns(2)
             with c1:
@@ -790,18 +789,9 @@ def run_streamlit_ui():
 
             # Bundle download (Markdown)
             bundle = (
-                "# Hooks
-" + "
-".join(f"- {h}" for h in hooks) +
-                "
-
-# Captions
-" + "
-".join(f"- {c}" for c in caps) +
-                "
-
-# Hashtags
-" + tag_line_space
+                "# Hooks\n" + "\n".join(f"- {h}" for h in hooks) +
+                "\n\n# Captions\n" + "\n".join(f"- {c}" for c in caps) +
+                "\n\n# Hashtags\n" + tag_line_space
             )
             st.download_button(
                 "⬇️ Hooks+Captions+Tags als MD",
@@ -810,5 +800,5 @@ def run_streamlit_ui():
                 mime="text/markdown",
             )
 
-    st.caption(""Hinweis: Diese App nutzt öffentliche Daten. 'Shorts' werden über Videolänge approximiert (≤60s hard cap).")
+    st.caption("Hinweis: Diese App nutzt öffentliche Daten. 'Shorts' werden über Videolänge approximiert (≤60s hard cap).")
 
