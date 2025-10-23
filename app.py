@@ -779,7 +779,8 @@ def run_streamlit_ui():
             st.markdown("**Hashtags (relevant)**")
             tags = generate_hashtags_de(topic=input_topic, title=input_title, n=12)
             tag_line_space = " ".join(tags)
-            tag_line_newline = "\n".join(tags)
+            tag_line_newline = "
+".join(tags)
             st.markdown(" ".join(f"`{t}`" for t in tags))
             c1, c2 = st.columns(2)
             with c1:
@@ -809,5 +810,5 @@ def run_streamlit_ui():
                 mime="text/markdown",
             )
 
-    st.caption("Hinweis: Diese App nutzt öffentliche Daten. 'Shorts' werden über Videolänge approximiert (≤60s hard cap).")
+    st.caption(""Hinweis: Diese App nutzt öffentliche Daten. 'Shorts' werden über Videolänge approximiert (≤60s hard cap).")
 
