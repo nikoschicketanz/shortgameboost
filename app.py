@@ -84,6 +84,7 @@ def cache_data(*dargs, **dkwargs):
     return _wrap
 
 # --- YouTube & Auth ---------------------------------------------------------
+# Try official google client; if missing we will fallback to a lightweight HTTP client
 try:
     from googleapiclient.discovery import build
     from google_auth_oauthlib.flow import InstalledAppFlow
@@ -92,6 +93,55 @@ except Exception:
     build = None  # type: ignore
     InstalledAppFlow = None  # type: ignore
     Credentials = None  # type: ignore
+
+# Minimal HTTP fallback (no google-api-python-client required)
+import urllib.parse as _urlparse
+import urllib.request as _urlrequest
+
+def _http_get_json(url: str, params: dict, headers: dict | None = None) -> dict:
+    qs = _urlparse.urlencode({k: v for k, v in params.items() if v is not None})
+    full = url + ("?" + qs if qs else "")
+    req = _urlrequest.Request(full, headers=headers or {})
+    with _urlrequest.urlopen(req, timeout=30) as resp:
+        data = resp.read().decode("utf-8")
+        return json.loads(data)
+
+class _YTReq:
+    def __init__(self, url: str, params: dict, headers: dict):
+        self.url = url
+        self.params = params
+        self.headers = headers
+    def execute(self) -> dict:
+        return _http_get_json(self.url, self.params, self.headers)
+
+class SimpleYouTubeClient:
+    """Tiny wrapper mimicking googleapiclient's .search().list(...).execute() API."""
+    def __init__(self, api_key: str | None = None, oauth_token: str | None = None):
+        self.api_key = api_key
+        self.oauth_token = oauth_token
+    def _headers(self) -> dict:
+        h = {"Accept": "application/json"}
+        if self.oauth_token:
+            h["Authorization"] = f"Bearer {self.oauth_token}"
+        return h
+    def search(self):
+        parent = self
+        class _Search:
+            def list(self, **kwargs):
+                params = kwargs.copy()
+                if parent.api_key:
+                    params["key"] = parent.api_key
+                return _YTReq("https://www.googleapis.com/youtube/v3/search", params, parent._headers())
+        return _Search()
+    def videos(self):
+        parent = self
+        class _Videos:
+            def list(self, **kwargs):
+                params = kwargs.copy()
+                if parent.api_key:
+                    params["key"] = parent.api_key
+                return _YTReq("https://www.googleapis.com/youtube/v3/videos", params, parent._headers())
+        return _Videos()
 
 # Transcripts
 try:
@@ -131,15 +181,25 @@ SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"]
 
 @cache_data(show_spinner=False)
 def yt_client_with_key(api_key: str):
-    if not build:
-        raise RuntimeError("google-api-python-client is not installed.")
-    return build("youtube", "v3", developerKey=api_key, static_discovery=False)
+    """Return a YouTube client. Falls back to HTTP shim if google client not installed."""
+    if build is not None:
+        try:
+            return build("youtube", "v3", developerKey=api_key, static_discovery=False)
+        except Exception:
+            pass
+    # Fallback
+    return SimpleYouTubeClient(api_key=api_key)
 
 
 def yt_client_with_oauth(creds: Credentials):
-    if not build:
-        raise RuntimeError("google-api-python-client is not installed.")
-    return build("youtube", "v3", credentials=creds, static_discovery=False)
+    """Return a YouTube client using OAuth credentials; fallback to HTTP shim."""
+    if build is not None:
+        try:
+            return build("youtube", "v3", credentials=creds, static_discovery=False)
+        except Exception:
+            pass
+    token = getattr(creds, "token", None)
+    return SimpleYouTubeClient(api_key=None, oauth_token=token)
 
 
 def ensure_credentials_st() -> Optional["Credentials"]:
