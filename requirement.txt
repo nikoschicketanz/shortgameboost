@@ -1,0 +1,11 @@
+streamlit>=1.36.0
+google-api-python-client>=2.129.0
+google-auth>=2.33.0
+google-auth-oauthlib>=1.2.0
+python-dotenv>=1.0.1
+youtube-transcript-api>=0.6.2
+deepl>=1.17.0
+openai>=1.42.0
+tiktoken>=0.7.0
+pandas>=2.2.2
+python-dateutil>=2.9.0.post0
