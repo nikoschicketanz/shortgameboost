@@ -38,6 +38,11 @@ Notes
 - Uses YouTube Data API v3. "Shorts" approximated by duration; we enforce **≤60s** and you choose the stricter **max (default 40s)**.
 - Transcripts via `youtube-transcript-api`; translation via DeepL/OpenAI if keys exist.
 - Preview thumbnails; Views/Hour for fresh uploads; Best Posting Window (Europe/Berlin).
+- **Google OAuth (ohne API‑Key):** In Streamlit Cloud unter *Settings → Secrets* folgende Werte setzen:
+  - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (**Typ "Web application"**)  
+  - `OAUTH_REDIRECT_URI` = **deine Streamlit‑App‑URL** (z. B. `https://deinname-shortgame-webapp.streamlit.app`)  
+  Danach in der App auf **„Mit Google anmelden (ohne API‑Key)“** klicken.
+
 """
 
 from __future__ import annotations
@@ -138,9 +143,76 @@ def yt_client_with_oauth(creds: Credentials):
 
 
 def ensure_credentials_st() -> Optional["Credentials"]:
-    """Streamlit-only OAuth sign-in (optional). Stores creds in session_state."""
+    """Google OAuth Sign‑in for Streamlit Cloud (no API key needed).
+
+    Priority:
+    1) If creds already in session, return them.
+    2) If secrets ENV (GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/OAUTH_REDIRECT_URI) exist → do **web OAuth**
+       with redirect back to this Streamlit app (handles `code` in query params).
+    3) Fallback (local dev): if `client_secret.json` is present → Desktop OAuth.
+    """
     if not STREAMLIT_AVAILABLE:
         return None
+    st = _st
+
+    # 1) Existing session creds
+    if "oauth_creds" in st.session_state and st.session_state["oauth_creds"]:
+        return st.session_state["oauth_creds"]
+
+    # Helper to read query params (compat old/new Streamlit)
+    try:
+        get_qp = st.query_params  # type: ignore[attr-defined]
+        qp = {k: [v] if isinstance(v, str) else v for k, v in dict(get_qp).items()}  # normalize
+    except Exception:
+        qp = st.experimental_get_query_params()  # type: ignore
+
+    cid = os.getenv("GOOGLE_CLIENT_ID") or (getattr(st, "secrets", {}) or {}).get("GOOGLE_CLIENT_ID", "")
+    csecret = os.getenv("GOOGLE_CLIENT_SECRET") or (getattr(st, "secrets", {}) or {}).get("GOOGLE_CLIENT_SECRET", "")
+    redirect_uri = os.getenv("OAUTH_REDIRECT_URI") or (getattr(st, "secrets", {}) or {}).get("OAUTH_REDIRECT_URI", "")
+
+    # 2) Web OAuth (Streamlit Cloud)
+    if cid and csecret and redirect_uri and InstalledAppFlow is not None:
+        client_config = {
+            "web": {
+                "client_id": cid,
+                "client_secret": csecret,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [redirect_uri],
+            }
+        }
+        flow = InstalledAppFlow.from_client_config(client_config, SCOPES, redirect_uri=redirect_uri)
+
+        # If we were redirected back with a code → exchange for token
+        code = None
+        if isinstance(qp.get("code"), list) and qp.get("code"):
+            code = qp.get("code")[0]
+        if code:
+            try:
+                flow.fetch_token(code=code)
+                creds = flow.credentials
+                st.session_state["oauth_creds"] = creds
+                st.success("Erfolgreich mit Google angemeldet.")
+                return creds
+            except Exception as e:
+                st.error(f"OAuth Fehler: {e}")
+
+        auth_url, state = flow.authorization_url(
+            access_type="offline", include_granted_scopes="true", prompt="consent"
+        )
+        st.link_button("Mit Google anmelden (ohne API‑Key)", auth_url, use_container_width=False)
+        st.caption("Hinweis: Setze in Streamlit → Settings → Secrets: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, OAUTH_REDIRECT_URI (deine App‑URL).")
+        return None
+
+    # 3) Fallback Desktop OAuth (lokale Entwicklung)
+    if os.path.exists("client_secret.json") and InstalledAppFlow is not None:
+        if st.button("Mit Google anmelden (lokal)", type="secondary"):
+            creds = InstalledAppFlow.from_client_secrets_file("client_secret.json", SCOPES).run_local_server(port=0, prompt="consent")
+            st.session_state["oauth_creds"] = creds
+            st.success("Erfolgreich angemeldet.")
+            return creds
+
+    return None
     st = _st
     if "oauth_creds" in st.session_state and st.session_state["oauth_creds"]:
         return st.session_state["oauth_creds"]
@@ -612,8 +684,12 @@ def run_streamlit_ui():
 
     yt_api_key = os.getenv("YT_API_KEY", "")
     with st.expander("🔐 Anmeldung & API-Schlüssel"):
-        yt_api_key = st.text_input("YouTube Data API Key", value=yt_api_key, type="password")
+        st.markdown("**Option A:** Mit Google anmelden (empfohlen, kein API‑Key nötig)")
         creds = ensure_credentials_st()
+        st.markdown("""
+        **Option B:** API‑Key nutzen (YouTube Data API v3). Nur erforderlich, wenn du dich nicht einloggen willst.
+        """)
+        yt_api_key = st.text_input("YouTube Data API Key", value=os.getenv("YT_API_KEY", ""), type="password")
 
     st.divider()
 
