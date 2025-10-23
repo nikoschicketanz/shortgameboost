@@ -213,58 +213,6 @@ def ensure_credentials_st() -> Optional["Credentials"]:
     """
     if not STREAMLIT_AVAILABLE:
         return None
-    st = _st
-
-    # 1) Existing session creds
-    if "oauth_creds" in st.session_state and st.session_state["oauth_creds"]:
-        return st.session_state["oauth_creds"]
-
-    # Helper to read query params (compat old/new Streamlit)
-    try:
-        get_qp = st.query_params  # type: ignore[attr-defined]
-        qp = {k: [v] if isinstance(v, str) else v for k, v in dict(get_qp).items()}  # normalize
-    except Exception:
-        qp = st.experimental_get_query_params()  # type: ignore
-
-    cid = os.getenv("GOOGLE_CLIENT_ID") or (getattr(st, "secrets", {}) or {}).get("GOOGLE_CLIENT_ID", "")
-    csecret = os.getenv("GOOGLE_CLIENT_SECRET") or (getattr(st, "secrets", {}) or {}).get("GOOGLE_CLIENT_SECRET", "")
-    redirect_uri = os.getenv("OAUTH_REDIRECT_URI") or (getattr(st, "secrets", {}) or {}).get("OAUTH_REDIRECT_URI", "")
-
-    # 2) Web OAuth (Streamlit Cloud)
-    if cid and csecret and redirect_uri and InstalledAppFlow is not None:
-        client_config = {
-            "web": {
-                "client_id": cid,
-                "client_secret": csecret,
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "redirect_uris": [redirect_uri],
-            }
-        }
-        flow = InstalledAppFlow.from_client_config(client_config, SCOPES, redirect_uri=redirect_uri)
-
-        # If we were redirected back with a code → exchange for token
-        code = None
-        if isinstance(qp.get("code"), list) and qp.get("code"):
-            code = qp.get("code")[0]
-        if code:
-            try:
-                flow.fetch_token(code=code)
-                creds = flow.credentials
-                st.session_state["oauth_creds"] = creds
-                st.success("Erfolgreich mit Google angemeldet.")
-                return creds
-            except Exception as e:
-                st.error(f"OAuth Fehler: {e}")
-
-        auth_url, state = flow.authorization_url(
-            access_type="offline", include_granted_scopes="true", prompt="consent"
-        )
-        # Show both a button and a direct link (some browsers block new-tab buttons)
-        st.link_button("Mit Google anmelden (ohne API‑Key)", auth_url, use_container_width=False)
-        st.markdown(f"[➡️ Alternativ hier klicken, falls der Button blockiert ist]({auth_url})")
-        st.caption("Hinweis: Setze in Streamlit → Settings → Secrets: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, OAUTH_REDIRECT_URI (deine App‑URL).")
-        return None
 
     # 3) Fallback Desktop OAuth (lokale Entwicklung)
     if os.path.exists("client_secret.json") and InstalledAppFlow is not None:
@@ -422,16 +370,49 @@ def make_watch_url(video_id: str) -> str:
 
 
 # ----------------------------
+# Language helpers
+# ----------------------------
+
+_CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+
+def _infer_lang_from_row(row: pd.Series) -> str:
+    la = (row.get("defaultAudioLanguage") or row.get("defaultLanguage") or "").lower()
+    if la.startswith("de"):
+        return "de"
+    if la.startswith("en"):
+        return "en"
+    # heuristic: if title has many CJK chars → 'other'
+    title = str(row.get("title", ""))
+    if _CJK_RE.search(title):
+        return "other"
+    # unknown default to 'en' if ASCII heavy, else 'other'
+    try:
+        if all(ord(ch) < 128 for ch in title):
+            return "en"
+    except Exception:
+        pass
+    return "other"
+
+def filter_languages(df: pd.DataFrame, allowed: List[str]) -> pd.DataFrame:
+    if df.empty or not allowed:
+        return df
+    langs = df.apply(_infer_lang_from_row, axis=1)
+    return df[langs.isin([x.lower() for x in allowed])].copy()
+
+# ----------------------------
 # YouTube Search Logic
 # ----------------------------
 
-def search_shorts(yt, query: str, regions: List[str], published_after: datetime, max_results: int = 50) -> List[str]:
+def search_shorts(yt, query: str, regions: List[str], published_after: datetime, max_results: int = 50, langs: Optional[List[str]] = None) -> List[str]:
     """Search for videos matching query; return a de‑duplicated list of video IDs.
     NOTE: We refine by duration later.
     """
     video_ids: List[str] = []
+    langs = langs or []
     seen: set[str] = set()
     for rc in regions:
+        # If user picked exactly one language, hint the API to boost that language
+        relevance_lang = (langs[0] if len(langs) == 1 else None) or None
         req = yt.search().list(
             part="id",
             q=query,
@@ -440,6 +421,7 @@ def search_shorts(yt, query: str, regions: List[str], published_after: datetime,
             order="viewCount",
             publishedAfter=published_after.isoformat("T") + "Z",
             regionCode=rc,
+            relevanceLanguage=relevance_lang,
             videoDuration="short",  # API short = <4 min
         )
         res = req.execute()
@@ -481,6 +463,8 @@ def fetch_video_stats(yt, video_ids: List[str]) -> pd.DataFrame:
                     "likeCount": int(stats.get("likeCount", 0) or 0) if stats.get("likeCount") else None,
                     "commentCount": int(stats.get("commentCount", 0) or 0) if stats.get("commentCount") else None,
                     "thumbnailUrl": thumb_url,
+                    "defaultAudioLanguage": sn.get("defaultAudioLanguage", ""),
+                    "defaultLanguage": sn.get("defaultLanguage", ""),
                 }
             )
     df = pd.DataFrame(rows)
@@ -719,7 +703,7 @@ def _render_card(st, row: pd.Series):
     st.markdown(f"**[{row['title']}]({url})**")
     st.caption(f"{row['channelTitle']} · {int(row['viewCount']):,} Views · {int(row['durationSec'])}s")
     st.markdown(
-        f"Views/Tag: **{row['viewsPerDay']:,}**  · Views/Stunde: **{row['viewsPerHour']:,}**  · Like/View: **{row['likeViewPct']}%**  · Velocity: **{row['velocityScore']:,}**"
+        f"Views/Tag: **{row['viewsPerDay']:,}**  · Views/Stunde: **{row['viewsPerHour']:,}**  · Velocity: **{row['velocityScore']:,}**"
     )
 
 
@@ -775,11 +759,11 @@ def run_streamlit_ui():
     with c6:
         min_vpd = st.number_input("Min. Views/Tag (Velocity)", min_value=0, value=0, step=100)
     with c7:
-        min_like = st.number_input("Min. Like/View-%", min_value=0.0, value=0.0, step=0.5)
+        pref_langs = st.multiselect("Bevorzugte Sprache(n)", ["de", "en"], default=["de", "en"])  # DE/EN only
 
     c8, _ = st.columns([2, 2])
     with c8:
-        sort_by = st.selectbox("Sortieren nach", ["Views", "Views/Tag", "Velocity-Score", "Like/View-%"], index=2)
+        sort_by = st.selectbox("Sortieren nach", ["Views", "Views/Tag", "Velocity-Score"], index=2)
     limit_per_topic = st.slider("Max. Shorts je Thema", 5, 50, 15)
 
     run = st.button("🔥 Suche starten", type="primary")
@@ -803,12 +787,13 @@ def run_streamlit_ui():
 
         with st.spinner("Suche & Analyse läuft…"):
             for q in topic_list:
-                ids = search_shorts(yt, q, regions, published_after, max_results=limit_per_topic)
+                ids = search_shorts(yt, q, regions, published_after, max_results=limit_per_topic, langs=pref_langs)
                 if not ids:
                     continue
                 df = fetch_video_stats(yt, ids)
                 df = filter_candidates(df, min_views=min_views, max_seconds=max_seconds,
-                                       min_vpd=min_vpd, min_like_pct=min_like)
+                                       min_vpd=min_vpd, min_like_pct=0.0)
+                df = filter_languages(df, pref_langs)
                 if df.empty:
                     continue
                 df["topic"] = q or "Allgemein"
@@ -845,7 +830,7 @@ def run_streamlit_ui():
         st.subheader("📊 Ergebnis-Tabelle")
         st.dataframe(
             out_display[[
-                "topic", "title", "channelTitle", "viewCount", "viewsPerDay", "viewsPerHour", "likeViewPct",
+                "topic", "title", "channelTitle", "viewCount", "viewsPerDay", "viewsPerHour",
                 "velocityScore", "durationSec", "ageDays", "publishedAt", "url"
             ]],
             use_container_width=True,
@@ -857,8 +842,16 @@ def run_streamlit_ui():
             file_name="shorts_results.csv",
             mime="text/csv",
         )
-        md_lines = [f"# {APP_TITLE}", f"_{APP_SUBTITLE}_", "",
-                    out_display[["topic","title","channelTitle","viewCount","viewsPerDay","viewsPerHour","likeViewPct","velocityScore","durationSec","ageDays","publishedAt","url"]].to_markdown(index=False)]
+        def _df_to_md(d: pd.DataFrame) -> str:
+            cols = ["topic","title","channelTitle","viewCount","viewsPerDay","viewsPerHour","velocityScore","durationSec","ageDays","publishedAt","url"]
+            d = d[cols].copy()
+            header = "|" + "|".join(cols) + "|\n" + "|" + "|".join(["---"]*len(cols)) + "|\n"
+            lines = []
+            for _, r in d.iterrows():
+                vals = [str(r[c]) for c in cols]
+                lines.append("|" + "|".join(vals) + "|")
+            return header + "\n".join(lines)
+        md_lines = [f"# {APP_TITLE}", f"_{APP_SUBTITLE}_", "", _df_to_md(out_display)]
         st.download_button(
             "⬇️ Markdown exportieren",
             data="\n".join(md_lines).encode("utf-8"),
@@ -959,9 +952,6 @@ def run_streamlit_ui():
 # Entry points for Streamlit & CLI
 # ----------------------------
 if _in_streamlit_runtime():
-    # We are running under Streamlit → launch the UI
     run_streamlit_ui()
 elif __name__ == "__main__":
-    # Plain Python execution → CLI fallback
     run_cli()
-
