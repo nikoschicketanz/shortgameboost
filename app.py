@@ -779,13 +779,8 @@ def run_streamlit_ui():
             st.markdown("**Hashtags (relevant)**")
             tags = generate_hashtags_de(topic=input_topic, title=input_title, n=12)
             tag_line_space = " ".join(tags)
-            tag_line_newline = "\n".join(tags)
-            st.markdown(" ".join(f"`{t}`" for t in tags))
-            c1, c2 = st.columns(2)
-            with c1:
-                _render_copy_button(st, "Alle (mit Leerzeichen) kopieren", tag_line_space, key="tags_space")
-            with c2:
-                _render_copy_button(st, "Alle (je Zeile) kopieren", tag_line_newline, key="tags_nl")
+            tag_line_newline = "
+".join(tags)
             st.markdown(" ".join(f"`{t}`" for t in tags))
             c1, c2 = st.columns(2)
             with c1:
@@ -793,18 +788,27 @@ def run_streamlit_ui():
             with c2:
                 _render_copy_button(st, "Alle (je Zeile) kopieren", tag_line_newline, key="tags_nl")
 
-            # Bundle download
-            bundle = "# Hooks
+            # Bundle download (Markdown)
+            bundle = (
+                "# Hooks
 " + "
-".join(f"- {h}" for h in hooks) + "
+".join(f"- {h}" for h in hooks) +
+                "
 
 # Captions
 " + "
-".join(f"- {c}" for c in caps) + "
+".join(f"- {c}" for c in caps) +
+                "
 
 # Hashtags
 " + tag_line_space
-            st.download_button("⬇️ Hooks+Captions+Tags als MD", data=bundle.encode("utf-8"), file_name="hooks_caps_tags.md")
+            )
+            st.download_button(
+                "⬇️ Hooks+Captions+Tags als MD",
+                data=bundle.encode("utf-8"),
+                file_name="hooks_caps_tags.md",
+                mime="text/markdown",
+            ), file_name="hooks_caps_tags.md")
 
     st.caption("Hinweis: Diese App nutzt öffentliche Daten. 'Shorts' werden über Videolänge approximiert (≤60s hard cap).")
 
