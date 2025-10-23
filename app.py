@@ -200,7 +200,9 @@ def ensure_credentials_st() -> Optional["Credentials"]:
         auth_url, state = flow.authorization_url(
             access_type="offline", include_granted_scopes="true", prompt="consent"
         )
+        # Show both a button and a direct link (some browsers block new-tab buttons)
         st.link_button("Mit Google anmelden (ohne API‑Key)", auth_url, use_container_width=False)
+        st.markdown(f"[➡️ Alternativ hier klicken, falls der Button blockiert ist]({auth_url})")
         st.caption("Hinweis: Setze in Streamlit → Settings → Secrets: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, OAUTH_REDIRECT_URI (deine App‑URL).")
         return None
 
