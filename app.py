@@ -533,6 +533,16 @@ def _render_copy_button(st, label: str, text: str, key: str):
 # STREAMLIT UI (only when available)
 # ----------------------------
 
+def _in_streamlit_runtime() -> bool:
+    """Detect if the script is running inside Streamlit's runtime."""
+    if not STREAMLIT_AVAILABLE:
+        return False
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx  # type: ignore
+        return get_script_run_ctx() is not None
+    except Exception:
+        return False
+
 # ----------------------------
 
 def _best_posting_windows(df: pd.DataFrame, tz_name: str = "Europe/Berlin", top_k: int = 3) -> List[Tuple[int, float]]:
@@ -806,4 +816,14 @@ def run_streamlit_ui():
             )
 
     st.caption("Hinweis: Diese App nutzt öffentliche Daten. 'Shorts' werden über Videolänge approximiert (≤60s hard cap).")
+
+# ----------------------------
+# Entry points for Streamlit & CLI
+# ----------------------------
+if _in_streamlit_runtime():
+    # We are running under Streamlit → launch the UI
+    run_streamlit_ui()
+elif __name__ == "__main__":
+    # Plain Python execution → CLI fallback
+    run_cli()
 
