@@ -54,7 +54,12 @@ from dateutil import parser as dtparser
 from typing import List, Dict, Optional, Tuple
 
 import pandas as pd
-from dotenv import load_dotenv
+# dotenv is optional (Streamlit Cloud sometimes lacks it until deps finish). Fallback no-op.
+try:
+    from dotenv import load_dotenv
+except Exception:
+    def load_dotenv(*args, **kwargs):
+        return False
 
 # --- Optional UI dependency -------------------------------------------------
 try:
