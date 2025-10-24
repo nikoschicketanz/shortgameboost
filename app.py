@@ -697,8 +697,257 @@ def _hour_range_label(h: int) -> str:
     return f"{h:02d}:00–{h2:02d}:00"
 
 
-def _render_card(st, row: pd.Series):
+def _render_card(st, row: pd.Series) -> None:
+    """One result card with thumbnail + KPIs."""
     url = make_watch_url(row["videoId"])
+    with st.container(border=False):
+        if str(row.get("thumbnailUrl", "")):
+            st.image(row.get("thumbnailUrl", ""), use_column_width=True)
+        st.markdown(f"**[{row.get('title','(ohne Titel)')}]({url})**")
+        st.markdown(
+            f"{row.get('channelTitle','?')} · {int(row.get('viewCount',0)):,} Views · {int(row.get('durationSec',0))}s"
+        )
+        st.markdown(
+            f"Views/Tag: **{int(row.get('viewsPerDay',0)):,}**  · Views/Stunde: **{int(row.get('viewsPerHour',0)):,}**  · Velocity: **{int(row.get('velocityScore',0)):,}**"
+        )
+
+
+def _render_results_ui(st, out_display: pd.DataFrame, topic_single: str) -> None:
+    """Render everything after results exist. Uses session_state to persist state between button clicks."""
+    st.success(f"Gefundene Shorts: {len(out_display)}")
+
+    # Cards grid
+    cols = st.columns(3)
+    for i in range(min(len(out_display), 12)):
+        with cols[i % 3]:
+            _render_card(st, out_display.iloc[i])
+
+    st.divider()
+    st.subheader("📊 Ergebnis-Tabelle")
+    st.dataframe(
+        out_display[[
+            "topic", "title", "channelTitle", "viewCount", "viewsPerDay", "viewsPerHour",
+            "velocityScore", "durationSec", "ageDays", "publishedAt", "url"
+        ]], use_container_width=True,
+    )
+
+    st.download_button(
+        "⬇️ CSV exportieren",
+        data=out_display.to_csv(index=False).encode("utf-8"),
+        file_name="shorts_results.csv", mime="text/csv",
+    )
+
+    def _df_to_md(d: pd.DataFrame) -> str:
+        cols = ["topic","title","channelTitle","viewCount","viewsPerDay","viewsPerHour","velocityScore","durationSec","ageDays","publishedAt","url"]
+        d = d[cols].copy()
+        header = "|" + "|".join(cols) + "|
+" + "|" + "|".join(["---"]*len(cols)) + "|
+"
+        lines = []
+        for _, r in d.iterrows():
+            vals = [str(r[c]) for c in cols]
+            lines.append("|" + "|".join(vals) + "|")
+        return header + "
+".join(lines)
+
+    st.download_button(
+        "⬇️ Markdown exportieren",
+        data="
+".join([f"# {APP_TITLE}", f"_{APP_SUBTITLE}_", "", _df_to_md(out_display)]).encode("utf-8"),
+        file_name="shorts_results.md", mime="text/markdown",
+    )
+
+    st.divider()
+    st.subheader("🕒 Best Posting Window (Europe/Berlin)")
+    tops = _best_posting_windows(out_display, tz_name="Europe/Berlin", top_k=3)
+    if not tops:
+        st.info("Keine Empfehlung möglich (zu wenig Daten).")
+    else:
+        for h, score in tops:
+            st.markdown(f"- **{_hour_range_label(h)}** — Score: `{int(score)}`")
+        st.caption("*Score ist die aufsummierte Velocity der Ergebnisse pro Stunde.*")
+
+    # Persist transcript & ideas
+    st.divider()
+    st.subheader("📝 Transcript & Übersetzung (auf Anfrage)")
+    ss = st.session_state
+    ss.setdefault("transcript_text", "")
+    ss.setdefault("transcript_lang", "")
+
+    vid_for_tr = st.selectbox(
+        "Video auswählen",
+        out_display["videoId"].tolist(),
+        format_func=lambda v: out_display[out_display.videoId == v]["title"].iloc[0],
+        key="vid_for_tr_select",
+    )
+    if st.button("Transcript holen", type="secondary"):
+        lang, txt = get_transcript(vid_for_tr)
+        if not txt:
+            st.error("Kein Transcript verfügbar.")
+        else:
+            ss["transcript_text"], ss["transcript_lang"] = txt, (lang or "")
+
+    if ss.get("transcript_text"):
+        st.markdown(f"**Sprache erkannt:** {ss.get('transcript_lang') or 'unbekannt'}")
+        st.text_area("Transcript", value=ss.get("transcript_text", ""), height=200)
+        if (ss.get("transcript_lang", "").lower() in ("en", "auto")) or st.checkbox("Trotzdem auf Deutsch übersetzen"):
+            with st.spinner("Übersetze …"):
+                de = translate_to_de(ss.get("transcript_text", ""))
+            st.text_area("Deutsch (auto)", value=de, height=220)
+            st.download_button("Als TXT speichern (DE)", data=de.encode("utf-8"), file_name=f"{vid_for_tr}_de.txt")
+
+    st.divider()
+    st.subheader("🎣 Hook & Caption Generator (DE)")
+    hc_n = st.slider("Anzahl Ideen", 3, 6, 3)
+    default_title = out_display[out_display.videoId == st.session_state.get("vid_for_tr_select")]["title"].iloc[0] if len(out_display) else ""
+    input_title = st.text_input("Titel/Claim (Basis)", value=default_title)
+    input_topic = st.text_input("Thema (optional)", value=topic_single)
+    transcript_hint = st.text_area("Transcript (optional, DE/EN)", value=ss.get("transcript_text", ""), height=120)
+    if st.button("⚡ 3+ Ideen generieren"):
+        hooks, caps = generate_hooks_captions_de(input_title, transcript_hint, input_topic, n=hc_n)
+        ss["hooks"], ss["caps"] = hooks, caps
+    if ss.get("hooks") and ss.get("caps"):
+        st.markdown("**Hooks**")
+        for i, h in enumerate(ss["hooks"], 1):
+            c1, c2 = st.columns([0.9, 0.1])
+            with c1: st.markdown(f"{i}. {h}")
+            with c2: _render_copy_button(st, "Copy", h, key=f"hook_{i}")
+        st.markdown("**Captions**")
+        for i, c in enumerate(ss["caps"], 1):
+            c1, c2 = st.columns([0.9, 0.1])
+            with c1: st.markdown(f"{i}. {c}")
+            with c2: _render_copy_button(st, "Copy", c, key=f"cap_{i}")
+        st.markdown("**Hashtags (relevant)**")
+        tags = generate_hashtags_de(topic=input_topic, title=input_title, n=12)
+        tag_line_space = " ".join(tags)
+        tag_line_newline = "
+".join(tags)
+        st.markdown(" ".join(f"`{t}`" for t in tags))
+        c1, c2 = st.columns(2)
+        with c1: _render_copy_button(st, "Alle (mit Leerzeichen) kopieren", tag_line_space, key="tags_space")
+        with c2: _render_copy_button(st, "Alle (je Zeile) kopieren", tag_line_newline, key="tags_nl")
+        bundle = (
+            "# Hooks
+" + "
+".join(f"- {h}" for h in ss["hooks"]) +
+            "
+
+# Captions
+" + "
+".join(f"- {c}" for c in ss["caps"]) +
+            "
+
+# Hashtags
+" + tag_line_space
+        )
+        st.download_button("⬇️ Hooks+Captions+Tags als MD", data=bundle.encode("utf-8"), file_name="hooks_caps_tags.md", mime="text/markdown")
+
+
+def run_streamlit_ui() -> None:
+    """Main Streamlit UI."""
+    st = _st
+    st.set_page_config(page_title=APP_TITLE, page_icon="🔥", layout="wide")
+    st.title(APP_TITLE)
+    st.caption(APP_SUBTITLE)
+
+    with st.expander("🔐 Anmeldung & API-Schlüssel", expanded=True):
+        st.markdown("**Option A:** Mit Google anmelden (optional)")
+        st.caption("Hinweis: OAuth ist optional; API‑Key genügt für die Suche.")
+        yt_api_key = st.text_input("YouTube Data API Key", value=os.getenv("YT_API_KEY", ""), type="password")
+
+    st.divider()
+    topic_single = st.text_input("Thema/Prompt", value="How to level up your Business with KI")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        regions = st.multiselect("Regionen", ["US","DE","GB","CA","AU"], default=["US","DE","GB"])  
+    with c2:
+        pref_langs = st.multiselect("Bevorzugte Sprache(n)", ["de","en"], default=["de","en"])  
+    with c3:
+        limit_per_topic = st.slider("Max. Treffer pro Thema", 5, 50, 20)
+
+    c4, c5, c6 = st.columns(3)
+    with c4:
+        min_views = st.number_input("Min. Aufrufe", min_value=0, value=DEFAULT_MIN_VIEWS, step=5000)
+    with c5:
+        max_seconds = st.slider("Max. Länge (Sekunden)", 10, 60, DEFAULT_MAX_SECONDS)
+    with c6:
+        window_days = st.slider("Zeitfenster (Tage)", 1, 60, DEFAULT_WINDOW_DAYS)
+
+    c7, _ = st.columns([2,1])
+    with c7:
+        min_vpd = st.number_input("Min. Views/Tag (Velocity)", min_value=0, value=0, step=100)
+
+    run = st.button("🔥 Suche starten", type="primary")
+
+    if run:
+        if not yt_api_key:
+            st.error("Bitte API-Key setzen (oder OAuth später aktivieren).")
+            return
+        yt = yt_client_with_key(yt_api_key)
+        published_after = datetime.now(timezone.utc) - timedelta(days=int(window_days))
+        queries = [x.strip() for x in topic_single.split(",") if x.strip()]
+        all_rows: List[pd.DataFrame] = []
+        for q in queries:
+            ids = search_shorts(yt, q, regions, published_after, max_results=limit_per_topic, langs=pref_langs)
+            df = fetch_video_stats(yt, ids)
+            df = filter_candidates(df, min_views=min_views, max_seconds=max_seconds, min_vpd=min_vpd, min_like_pct=0.0)
+            df = filter_languages(df, pref_langs)
+            if df.empty:
+                continue
+            df["topic"] = q
+            all_rows.append(df)
+        if not all_rows:
+            st.warning("Keine Ergebnisse mit diesen Filtern.")
+            st.session_state["results"] = None
+            return
+        out = pd.concat(all_rows, ignore_index=True)
+        out.sort_values(["velocityScore","viewsPerDay","viewCount"], ascending=False, inplace=True)
+        out["url"] = out["videoId"].apply(make_watch_url)
+        st.session_state["results"] = out.copy()
+        _render_results_ui(st, out, topic_single)
+    else:
+        if st.session_state.get("results") is not None:
+            _render_results_ui(st, st.session_state["results"], topic_single)
+
+    st.caption("Hinweis: Diese App nutzt öffentliche Daten. 'Shorts' werden über Videolänge approximiert (≤60s hard cap).")
+
+
+def run_cli() -> None:
+    """CLI mode for environments without Streamlit."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--topics", type=str, required=True)
+    parser.add_argument("--regions", nargs="+", default=["US","DE","GB"])
+    parser.add_argument("--min-views", type=int, default=DEFAULT_MIN_VIEWS)
+    parser.add_argument("--max-sec", type=int, default=DEFAULT_MAX_SECONDS)
+    parser.add_argument("--window-days", type=int, default=DEFAULT_WINDOW_DAYS)
+    parser.add_argument("--min-vpd", type=float, default=0.0)
+    parser.add_argument("--limit", type=int, default=20)
+    parser.add_argument("--api-key", type=str, default=os.getenv("YT_API_KEY",""))
+    args = parser.parse_args()
+
+    if not args.api_key:
+        print("Missing --api-key or YT_API_KEY env.")
+        return
+    yt = yt_client_with_key(args.api_key)
+    published_after = datetime.now(timezone.utc) - timedelta(days=int(args.window_days))
+    queries = [x.strip() for x in args.topics.split(",") if x.strip()]
+    all_rows: List[pd.DataFrame] = []
+    for q in queries:
+        ids = search_shorts(yt, q, args.regions, published_after, max_results=int(args.limit))
+        df = fetch_video_stats(yt, ids)
+        df = filter_candidates(df, min_views=int(args.min_views), max_seconds=int(args.max_sec), min_vpd=float(args.min_vpd))
+        if df.empty: continue
+        df["topic"] = q
+        all_rows.append(df)
+    if not all_rows:
+        print("No results.")
+        return
+    out = pd.concat(all_rows, ignore_index=True)
+    out.sort_values(["velocityScore","viewsPerDay","viewCount"], ascending=False, inplace=True)
+    out["url"] = out["videoId"].apply(make_watch_url)
+    out.to_csv("shorts_results.csv", index=False)
+    print("Wrote shorts_results.csv")
+
 # ----------------------------
 # Entry points for Streamlit & CLI
 # ----------------------------
