@@ -740,18 +740,16 @@ def _render_results_ui(st, out_display: pd.DataFrame, topic_single: str) -> None
     def _df_to_md(d: pd.DataFrame) -> str:
         cols = ["topic","title","channelTitle","viewCount","viewsPerDay","viewsPerHour","velocityScore","durationSec","ageDays","publishedAt","url"]
         d = d[cols].copy()
-        header = "|" + "|".join(cols) + "|
-" + "|" + "|".join(["---"]*len(cols)) + "|
-"
+        header = "|" + "|".join(cols) + "|\n" + "|" + "|".join(["---"]*len(cols)) + "|\n"
         lines = []
         for _, r in d.iterrows():
             vals = [str(r[c]) for c in cols]
             lines.append("|" + "|".join(vals) + "|")
-        return header + \\n.join(lines)
+        return header + "\n".join(lines)
 
     st.download_button(
         "⬇️ Markdown exportieren",
-        data=\\n.join([f"# {APP_TITLE}", f"_{APP_SUBTITLE}_", "", _df_to_md(out_display)]).encode("utf-8"),
+        data=("\n".join([f"# {APP_TITLE}", f"_{APP_SUBTITLE}_", "", _df_to_md(out_display)])).encode("utf-8"),
         file_name="shorts_results.md", mime="text/markdown",
     )
 
@@ -818,28 +816,20 @@ def _render_results_ui(st, out_display: pd.DataFrame, topic_single: str) -> None
         st.markdown("**Hashtags (relevant)**")
         tags = generate_hashtags_de(topic=input_topic, title=input_title, n=12)
         tag_line_space = " ".join(tags)
-        tag_line_newline = \\n.join(tags)
+        tag_line_newline = "\n".join(tags)
         st.markdown(" ".join(f"`{t}`" for t in tags))
         c1, c2 = st.columns(2)
         with c1: _render_copy_button(st, "Alle (mit Leerzeichen) kopieren", tag_line_space, key="tags_space")
         with c2: _render_copy_button(st, "Alle (je Zeile) kopieren", tag_line_newline, key="tags_nl")
         bundle = (
-            "# Hooks
-" + \\n.join(f"- {h}" for h in ss["hooks"]) +
-            "
-
-# Captions
-" + \\n.join(f"- {c}" for c in ss["caps"]) +
-            "
-
-# Hashtags
-" + tag_line_space
+            "# Hooks\n" + "\n".join(f"- {h}" for h in ss["hooks"]) +
+            "\n\n# Captions\n" + "\n".join(f"- {c}" for c in ss["caps"]) +
+            "\n\n# Hashtags\n" + tag_line_space
         )
         st.download_button("⬇️ Hooks+Captions+Tags als MD", data=bundle.encode("utf-8"), file_name="hooks_caps_tags.md", mime="text/markdown")
 
 
-def run_streamlit_ui() -> None:
-    """Main Streamlit UI."""
+def run_streamlit_ui(Main Streamlit UI."""
     st = _st
     st.set_page_config(page_title=APP_TITLE, page_icon="🔥", layout="wide")
     st.title(APP_TITLE)
